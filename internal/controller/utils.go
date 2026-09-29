@@ -369,7 +369,8 @@ func ParseRouteParentRefs(
 			Name:      name,
 		}, &gateway); err != nil {
 			if client.IgnoreNotFound(err) == nil {
-				unresolved = true
+				// Gateway is confirmed absent (deleted or nonexistent).
+				// Do not mark as unresolved so that routes whose parents are confirmed gone can be cleaned up.
 				continue
 			}
 			return nil, false, fmt.Errorf("failed to retrieve gateway for route: %w", err)

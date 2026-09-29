@@ -175,6 +175,84 @@ func TestDeleteTriggersImmediateSyncForEvictedConfigs(t *testing.T) {
 	assert.Empty(t, received[0].Task.Config.Services, "the evicted config's push must carry an empty resource set")
 }
 
+// TestDeleteGatewayPreservesSharedGatewayProxyOwners verifies that deleting one Gateway
+// from a shared GatewayProxy removes only that Gateway's contributions while preserving
+// other owners' SSLs and Services on the shared proxy.
+func TestDeleteGatewayPreservesSharedGatewayProxyOwners(t *testing.T) {
+	var mu sync.Mutex
+	var received []adcclient.ADCServerRequest
+
+	withMockADCServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var req adcclient.ADCServerRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		mu.Lock()
+		received = append(received, req)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(adctypes.SyncResult{Status: adctypes.StatusSuccess})
+	})
+
+	d := newTestProvider(t)
+	gpKey := types.NamespacedNameKind{Namespace: "default", Name: "proxy", Kind: "GatewayProxy"}
+	gpConfig := adctypes.Config{
+		Name:        "proxy",
+		BackendType: "apisix",
+		ServerAddrs: []string{"http://apisix:9080"},
+	}
+
+	gwA := &gatewayv1.Gateway{
+		TypeMeta:   metav1.TypeMeta{Kind: "Gateway", APIVersion: gatewayv1.GroupVersion.String()},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "gw-a"},
+	}
+	gwB := &gatewayv1.Gateway{
+		TypeMeta:   metav1.TypeMeta{Kind: "Gateway", APIVersion: gatewayv1.GroupVersion.String()},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "gw-b"},
+	}
+	routeB := &gatewayv1.HTTPRoute{
+		TypeMeta:   metav1.TypeMeta{Kind: "HTTPRoute", APIVersion: gatewayv1.GroupVersion.String()},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "route-b"},
+	}
+
+	// Register configs for gwA, gwB, and routeB on the shared proxy
+	d.configManager.Update(utils.NamespacedNameKind(gwA), map[types.NamespacedNameKind]adctypes.Config{gpKey: gpConfig})
+	d.configManager.Update(utils.NamespacedNameKind(gwB), map[types.NamespacedNameKind]adctypes.Config{gpKey: gpConfig})
+	d.configManager.Update(utils.NamespacedNameKind(routeB), map[types.NamespacedNameKind]adctypes.Config{gpKey: gpConfig})
+
+	// Insert contributions
+	require.NoError(t, d.store.Insert("proxy", []string{adctypes.TypeSSL}, &adctypes.Resources{
+		SSLs: []*adctypes.SSL{{Metadata: adctypes.Metadata{ID: "ssl-a", Labels: labelsOf(utils.NamespacedNameKind(gwA))}}},
+	}, labelsOf(utils.NamespacedNameKind(gwA))))
+	require.NoError(t, d.store.Insert("proxy", []string{adctypes.TypeSSL}, &adctypes.Resources{
+		SSLs: []*adctypes.SSL{{Metadata: adctypes.Metadata{ID: "ssl-b", Labels: labelsOf(utils.NamespacedNameKind(gwB))}}},
+	}, labelsOf(utils.NamespacedNameKind(gwB))))
+	require.NoError(t, d.store.Insert("proxy", []string{adctypes.TypeService}, &adctypes.Resources{
+		Services: []*adctypes.Service{{Metadata: adctypes.Metadata{ID: "svc-b", Name: "svc-b", Labels: labelsOf(utils.NamespacedNameKind(routeB))}}},
+	}, labelsOf(utils.NamespacedNameKind(routeB))))
+
+	// Delete gwA
+	require.NoError(t, d.Delete(context.Background(), gwA))
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, received, 1, "deleting gwA must push an immediate update for the shared proxy")
+	assert.Equal(t, "proxy", received[0].Task.Opts.CacheKey)
+
+	// gwA's SSL must be gone, but gwB's SSL and routeB's Service must remain
+	var sslIDs []string
+	for _, ssl := range received[0].Task.Config.SSLs {
+		sslIDs = append(sslIDs, ssl.ID)
+	}
+	assert.NotContains(t, sslIDs, "ssl-a", "gwA's SSL must be removed")
+	assert.Contains(t, sslIDs, "ssl-b", "gwB's SSL must be preserved")
+
+	var svcIDs []string
+	for _, svc := range received[0].Task.Config.Services {
+		svcIDs = append(svcIDs, svc.ID)
+	}
+	assert.Contains(t, svcIDs, "svc-b", "routeB's Service must be preserved")
+}
+
+
 // TestSyncStillPushesHealthyConfigsWhenAnotherFails covers sync's error aggregation: one
 // GatewayProxy's push failing must not stop the others in the same round from being
 // attempted, and the failure must still be reported.
@@ -271,7 +349,7 @@ func TestRemoveResourceStateRemovesAnApisixGlobalRulesPlugins(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, resources.GlobalRules, 2)
 
-	_, err = d.removeResourceState(globalRule, nil, labelsOf(globalRule), pluginsFromResource, false)
+	_, err = d.removeResourceState(globalRule, nil, labelsOf(globalRule), pluginsFromResource)
 	require.NoError(t, err)
 	resources, err = d.store.GetResources(proxy.String())
 	require.NoError(t, err)

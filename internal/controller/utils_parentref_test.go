@@ -270,7 +270,7 @@ func TestParseRouteParentRefs_UnresolvedParents(t *testing.T) {
 			name:           "gateway missing",
 			objects:        []client.Object{newParentRefGatewayClass()},
 			parentRef:      "gw",
-			wantUnresolved: true,
+			wantUnresolved: false,
 		},
 		{
 			name:           "gatewayclass missing",
