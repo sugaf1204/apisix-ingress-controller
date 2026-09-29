@@ -98,6 +98,8 @@ import (
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=grpcroutes/status,verbs=get;update
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=tlsroutes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=tlsroutes/status,verbs=get;update
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=listenersets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=listenersets/status,verbs=get;update
 
 // Networking
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch
@@ -209,6 +211,13 @@ func setupGatewayAPIControllers(ctx context.Context, mgr manager.Manager, pro pr
 			Provider: pro,
 			Updater:  updater,
 			Readier:  readier,
+		},
+		&gatewayv1.ListenerSet{}: &controller.ListenerSetReconciler{
+			Client:   mgr.GetClient(),
+			Scheme:   mgr.GetScheme(),
+			Log:      ctrl.LoggerFrom(ctx).WithName("controllers").WithName(types.KindListenerSet),
+			Provider: pro,
+			Updater:  updater,
 		},
 	} {
 		installed, err := utils.HasAPIResource(mgr, resource)

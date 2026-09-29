@@ -23,7 +23,10 @@ import (
 )
 
 type RouteParentRefContext struct {
-	Gateway *gatewayv1.Gateway
+	Gateway     *gatewayv1.Gateway
+	ListenerSet *gatewayv1.ListenerSet
+	IsListenerSet bool
+	ParentRef   gatewayv1.ParentReference
 
 	ListenerName string
 	Listener     *gatewayv1.Listener

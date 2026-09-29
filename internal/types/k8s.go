@@ -83,6 +83,7 @@ const (
 	KindConsumer             = "Consumer"
 	KindPluginConfig         = "PluginConfig"
 	KindApisixUpstream       = "ApisixUpstream"
+	KindListenerSet          = "ListenerSet"
 )
 
 const (
@@ -96,6 +97,8 @@ func KindOf(obj any) string {
 	switch obj.(type) {
 	case *gatewayv1.Gateway:
 		return KindGateway
+	case *gatewayv1.ListenerSet:
+		return KindListenerSet
 	case *gatewayv1.TCPRoute:
 		return KindTCPRoute
 	case *gatewayv1.UDPRoute:

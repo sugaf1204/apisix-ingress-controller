@@ -105,6 +105,25 @@ func (r *GRPCRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				},
 			),
 		).
+		Watches(&gatewayv1.ListenerSet{},
+			handler.EnqueueRequestsFromMapFunc(r.listGRPCRoutesForListenerSet),
+			builder.WithPredicates(
+				predicate.Funcs{
+					GenericFunc: func(e event.GenericEvent) bool {
+						return false
+					},
+					DeleteFunc: func(e event.DeleteEvent) bool {
+						return true
+					},
+					CreateFunc: func(e event.CreateEvent) bool {
+						return true
+					},
+					UpdateFunc: func(e event.UpdateEvent) bool {
+						return true
+					},
+				},
+			),
+		).
 		Watches(&v1alpha1.BackendTrafficPolicy{},
 			handler.EnqueueRequestsFromMapFunc(r.listGRPCRoutesForBackendTrafficPolicy),
 			builder.WithPredicates(
@@ -260,7 +279,7 @@ func (r *GRPCRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	gr.Status.Parents = make([]gatewayv1.RouteParentStatus, 0, len(gateways))
 	for _, gateway := range gateways {
 		parentStatus := gatewayv1.RouteParentStatus{}
-		SetRouteParentRef(&parentStatus, gateway.Gateway.Name, gateway.Gateway.Namespace)
+		SetRouteParentRefFromContext(&parentStatus, gateway)
 		for _, condition := range gateway.Conditions {
 			parentStatus.Conditions = MergeCondition(parentStatus.Conditions, condition)
 		}
@@ -395,6 +414,31 @@ func (r *GRPCRouteReconciler) listGRPCRoutesForGateway(ctx context.Context, obj 
 		indexer.ParentRefs: indexer.GenIndexKey(gateway.Namespace, gateway.Name),
 	}); err != nil {
 		r.Log.Error(err, "failed to list grpcroutes by gateway", "gateway", gateway.Name)
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(grList.Items))
+	for _, gr := range grList.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: client.ObjectKey{
+				Namespace: gr.Namespace,
+				Name:      gr.Name,
+			},
+		})
+	}
+	return requests
+}
+
+func (r *GRPCRouteReconciler) listGRPCRoutesForListenerSet(ctx context.Context, obj client.Object) []reconcile.Request {
+	ls, ok := obj.(*gatewayv1.ListenerSet)
+	if !ok {
+		r.Log.Error(fmt.Errorf("unexpected object type"), "failed to convert object to ListenerSet")
+		return nil
+	}
+	grList := &gatewayv1.GRPCRouteList{}
+	if err := r.List(ctx, grList, client.MatchingFields{
+		indexer.ParentRefs: indexer.GenIndexKey(ls.Namespace, ls.Name),
+	}); err != nil {
+		r.Log.Error(err, "failed to list grpcroutes by listenerset", "listenerset", ls.Name)
 		return nil
 	}
 	requests := make([]reconcile.Request, 0, len(grList.Items))

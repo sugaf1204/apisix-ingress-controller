@@ -174,6 +174,9 @@ func (d *apisixProvider) Update(ctx context.Context, tctx *provider.TranslateCon
 		result, err = d.translator.TranslateGateway(tctx, t.DeepCopy())
 		resourceTypes = append(resourceTypes, adctypes.TypeSSL)
 		plugins = pluginsFromGatewayProxy
+	case *gatewayv1.ListenerSet:
+		result, err = d.translator.TranslateListenerSet(tctx, t.DeepCopy())
+		resourceTypes = append(resourceTypes, adctypes.TypeSSL)
 	case *networkingv1.Ingress:
 		result, err = d.translator.TranslateIngress(tctx, t.DeepCopy())
 		resourceTypes = append(resourceTypes, adctypes.TypeService, adctypes.TypeSSL)
@@ -241,7 +244,7 @@ func (d *apisixProvider) Delete(ctx context.Context, obj client.Object) error {
 	case *gatewayv1.HTTPRoute, *apiv2.ApisixRoute, *gatewayv1.GRPCRoute, *gatewayv1.TCPRoute, *gatewayv1.UDPRoute, *gatewayv1.TLSRoute:
 		resourceTypes = append(resourceTypes, adctypes.TypeService)
 		labels = label.GenLabel(obj)
-	case *gatewayv1.Gateway:
+	case *gatewayv1.Gateway, *gatewayv1.ListenerSet:
 		resourceTypes = append(resourceTypes, adctypes.TypeSSL)
 		labels = label.GenLabel(obj)
 	case *networkingv1.IngressClass:

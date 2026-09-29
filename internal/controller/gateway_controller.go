@@ -138,6 +138,16 @@ func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.listGatewaysForStatusParentRefs),
 		)
 	}
+	hasListenerSet, err := pkgutils.HasAPIResource(mgr, &gatewayv1.ListenerSet{})
+	if err != nil {
+		return err
+	}
+	if hasListenerSet {
+		bdr.Watches(
+			&gatewayv1.ListenerSet{},
+			handler.EnqueueRequestsFromMapFunc(r.listGatewaysForListenerSet),
+		)
+	}
 
 	return bdr.Complete(r)
 }
@@ -279,13 +289,19 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	accepted := SetGatewayConditionAccepted(gateway, acceptStatus.status, acceptStatus.reason, acceptStatus.msg)
 	programmed := SetGatewayConditionProgrammed(gateway, conditionProgrammedStatus, conditionProgrammedReason, conditionProgrammedMsg)
 	addressesChanged := !addrResolveFailed && !reflect.DeepEqual(gateway.Status.Addresses, addrs)
-	if accepted || programmed || addressesChanged || len(listenerStatuses) > 0 {
+	attachedListenerSets, err := r.countAttachedListenerSets(ctx, gateway)
+	if err != nil {
+		r.Log.Error(err, "failed to count attached listener sets", "gateway", req.NamespacedName)
+	}
+	listenerSetsChanged := !reflect.DeepEqual(gateway.Status.AttachedListenerSets, attachedListenerSets)
+	if accepted || programmed || addressesChanged || len(listenerStatuses) > 0 || listenerSetsChanged {
 		if addressesChanged {
 			gateway.Status.Addresses = addrs
 		}
 		if len(listenerStatuses) > 0 {
 			gateway.Status.Listeners = listenerStatuses
 		}
+		gateway.Status.AttachedListenerSets = attachedListenerSets
 
 		r.Updater.Update(status.Update{
 			NamespacedName: utils.NamespacedName(gateway),
@@ -671,3 +687,70 @@ func (r *GatewayReconciler) processListenerConfig(tctx *provider.TranslateContex
 		}
 	}
 }
+
+func (r *GatewayReconciler) countAttachedListenerSets(ctx context.Context, gw *gatewayv1.Gateway) (*int32, error) {
+	lsList := &gatewayv1.ListenerSetList{}
+	if err := r.List(ctx, lsList); err != nil {
+		return nil, err
+	}
+	var count int32
+	for _, ls := range lsList.Items {
+		parentRef := ls.Spec.ParentRef
+		parentNs := ls.Namespace
+		if parentRef.Namespace != nil {
+			parentNs = string(*parentRef.Namespace)
+		}
+		if parentNs != gw.Namespace || string(parentRef.Name) != gw.Name {
+			continue
+		}
+		if parentRef.Group != nil && *parentRef.Group != gatewayv1.GroupName {
+			continue
+		}
+		if parentRef.Kind != nil && *parentRef.Kind != KindGateway {
+			continue
+		}
+		allowed, err := isListenerSetAllowedByGateway(ctx, r.Client, gw, ls.Namespace)
+		if err != nil || !allowed {
+			continue
+		}
+		isAccepted := false
+		for _, cond := range ls.Status.Conditions {
+			if cond.Type == string(gatewayv1.ListenerSetConditionAccepted) && cond.Status == metav1.ConditionTrue {
+				isAccepted = true
+				break
+			}
+		}
+		if isAccepted {
+			count++
+		}
+	}
+	return &count, nil
+}
+
+func (r *GatewayReconciler) listGatewaysForListenerSet(ctx context.Context, obj client.Object) []reconcile.Request {
+	ls, ok := obj.(*gatewayv1.ListenerSet)
+	if !ok {
+		r.Log.Error(fmt.Errorf("unexpected object type %T", obj), "failed to convert object to ListenerSet")
+		return nil
+	}
+	parentRef := ls.Spec.ParentRef
+	parentNs := ls.Namespace
+	if parentRef.Namespace != nil {
+		parentNs = string(*parentRef.Namespace)
+	}
+	if parentRef.Group != nil && *parentRef.Group != gatewayv1.GroupName {
+		return nil
+	}
+	if parentRef.Kind != nil && *parentRef.Kind != KindGateway {
+		return nil
+	}
+	return []reconcile.Request{
+		{
+			NamespacedName: client.ObjectKey{
+				Namespace: parentNs,
+				Name:      string(parentRef.Name),
+			},
+		},
+	}
+}
+
